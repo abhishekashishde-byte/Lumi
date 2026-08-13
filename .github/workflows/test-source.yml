@@ -1,5 +1,8 @@
 name: Test source access
-on: workflow_dispatch
+on:
+  push:
+    paths:
+      - '.github/workflows/test-source.yml'
 permissions:
   contents: read
 jobs:
