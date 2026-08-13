@@ -1,0 +1,12 @@
+name: Test source access
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test private source access
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/abhishekashishde-byte/warum-why.git" HEAD
