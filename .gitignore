@@ -1,9 +1,9 @@
-node_modules
-.output
-.vercel
+node_modules/
+.output/
+dist/
+.vercel/
 .env
 .env.*
 !.env.example
-dist
+*.local
 .DS_Store
-*.log
