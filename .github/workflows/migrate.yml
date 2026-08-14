@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - '.migration/**'
+      - 'Lumi-clean-vercel.zip'
       - '.github/workflows/migrate.yml'
 
 permissions:
@@ -15,15 +15,54 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Reassemble cleaned Lumi archive
+
+      - name: Install cleaned Lumi project
+        shell: bash
         run: |
-          cat .migration/part-* > /tmp/lumi-clean.tar.gz
-          tar -xzf /tmp/lumi-clean.tar.gz -C .
-          rm -rf .migration .github/workflows/migrate.yml
-      - name: Commit migrated app
+          set -euo pipefail
+          if [ ! -f Lumi-clean-vercel.zip ]; then
+            echo "Waiting for Lumi-clean-vercel.zip to be uploaded to the repository root."
+            exit 0
+          fi
+
+          rm -rf "$RUNNER_TEMP/lumi-clean"
+          mkdir -p "$RUNNER_TEMP/lumi-clean"
+          unzip -q Lumi-clean-vercel.zip -d "$RUNNER_TEMP/lumi-clean"
+
+          SRC="$RUNNER_TEMP/lumi-clean"
+          if [ ! -f "$SRC/package.json" ]; then
+            FIRST_DIR=$(find "$SRC" -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)
+            if [ -n "$FIRST_DIR" ] && [ -f "$FIRST_DIR/package.json" ]; then
+              SRC="$FIRST_DIR"
+            fi
+          fi
+
+          test -f "$SRC/package.json"
+          test -d "$SRC/src"
+
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name 'Lumi-clean-vercel.zip' -exec rm -rf {} +
+          cp -a "$SRC"/. .
+          rm -f Lumi-clean-vercel.zip
+          rm -rf .migration
+          rm -rf .github
+
+      - name: Verify Lovable is gone
+        shell: bash
         run: |
+          set -euo pipefail
+          test ! -d .lovable
+          test ! -f .env
+          ! grep -R "ai.gateway.lovable.dev" -n src package.json vite.config.ts 2>/dev/null
+          ! grep -R '"@lovable.dev/' -n package.json 2>/dev/null
+          test -f src/lib/ai/provider.ts
+          test -f vercel.json
+
+      - name: Commit complete Lumi repository
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name "Lumi Migration"
           git config user.email "actions@users.noreply.github.com"
           git add -A
-          git commit -m "Migrate cleaned Lumi app off Lovable" || exit 0
+          git commit -m "Complete independent Lumi migration" || exit 0
           git push
