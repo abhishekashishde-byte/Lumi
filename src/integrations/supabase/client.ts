@@ -18,6 +18,7 @@ declare global {
 // quirks while service-role/secret keys remain server-only.
 const DEFAULT_SUPABASE_URL = 'https://xvlflsdanfzytxlwpthr.supabase.co';
 const DEFAULT_PUBLISHABLE_KEY_B64 = 'c2JfcHVibGlzaGFibGVfTE8xa2lWd3Z4NVBacGdWeFJHX3M3QV9BMlk0aG5zNg==';
+const LUMI_AUTH_REDIRECT = 'https://lumi-five-beryl.vercel.app/welcome';
 
 function decodePublishableKey(): string {
   if (typeof atob === 'function') return atob(DEFAULT_PUBLISHABLE_KEY_B64);
@@ -86,10 +87,36 @@ function createSupabaseClient() {
 }
 
 let _supabase: ReturnType<typeof createSupabaseClient> | undefined;
+let _authProxy: ReturnType<typeof createSupabaseClient>['auth'] | undefined;
 
 export const supabase = new Proxy({} as ReturnType<typeof createSupabaseClient>, {
   get(_, prop, receiver) {
     if (!_supabase) _supabase = createSupabaseClient();
+
+    if (prop === 'auth') {
+      if (!_authProxy) {
+        const auth = _supabase.auth;
+        _authProxy = new Proxy(auth, {
+          get(target, authProp, authReceiver) {
+            if (authProp === 'signInWithOAuth') {
+              return (credentials: any) =>
+                target.signInWithOAuth({
+                  ...credentials,
+                  options: {
+                    ...(credentials?.options ?? {}),
+                    redirectTo: LUMI_AUTH_REDIRECT,
+                  },
+                });
+            }
+
+            const value = Reflect.get(target, authProp, authReceiver);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+      }
+      return _authProxy;
+    }
+
     return Reflect.get(_supabase, prop, receiver);
   },
 });
