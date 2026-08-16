@@ -30,6 +30,7 @@ export const Route = createFileRoute("/welcome")({
 
 const GOLD = "#D4AF37";
 const GOLD_LIGHT = "#F4E4BC";
+const LUMI_PRODUCTION_URL = "https://lumi-five-beryl.vercel.app";
 
 function LangToggle() {
   const { lang, setLang } = useLang();
@@ -110,7 +111,7 @@ function WelcomePage() {
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: `${window.location.origin}/welcome` },
+        options: { redirectTo: `${LUMI_PRODUCTION_URL}/welcome` },
       });
       if (error) {
         setError(error.message ?? "Sign-in failed");
