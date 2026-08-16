@@ -8,6 +8,7 @@ import { defineConfig, loadEnv } from "vite";
 export default defineConfig(({ mode }) => {
   // Vercel provides deployment variables through process.env during the build.
   // loadEnv also preserves normal local Vite development behaviour.
+  // Touching this config intentionally forces the Git-connected production deploy.
   const fileEnv = loadEnv(mode, process.cwd(), "");
   const env = { ...fileEnv, ...process.env };
 
