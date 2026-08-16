@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { generateText } from "@/lib/ai/provider";
+import { requireLumiApiAccess } from "@/lib/api/auth.server";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
@@ -20,10 +21,10 @@ function systemPrompt(age: number, lang: "de" | "en", context: string) {
   return (de
     ? `Du bist Lumi, ein warmer, freundlicher Erklär-Freund. Antworte IMMER auf Deutsch, muttersprachlich fehlerfrei (Grammatik, Kasus, Artikel, Umlaute). Ton: ${tone} Keine Markdown-Formatierung, keine Listen, nur natürliche Sätze.
 
-WICHTIG — Themenbezug: Prüfe zuerst, ob die Frage inhaltlich mit dem KONTEXT (ursprüngliche Frage und Antwort) zu tun hat. Wenn NICHT (z. B. völlig anderes Thema, Smalltalk, Spiele, andere Wissenschaftsbereiche), antworte NUR mit genau diesem Satz und nichts anderem: "Hm, das gehört nicht zu unserer Frage. ${offTopic}" Führe niemals off-topic aus, auch nicht "kurz". Nur wenn die Frage klar zum Thema gehört, erkläre sie im Ton oben.`
+WICHTIG — Themenbezug: Prüfe zuerst, ob die Frage inhaltlich mit dem KONTEXT (ursprüngliche Frage und Antwort) zu tun hat. Wenn NICHT, antworte NUR mit genau diesem Satz und nichts anderem: "Hm, das gehört nicht zu unserer Frage. ${offTopic}" Nur wenn die Frage klar zum Thema gehört, erkläre sie im Ton oben.`
     : `You are Lumi, a warm and friendly explainer-friend. ALWAYS answer in English. Tone: ${tone} No markdown, no lists, just natural sentences.
 
-IMPORTANT — topic guard: First check if the question is genuinely related to the CONTEXT (the original question and its answer). If it is NOT (a totally different topic, small talk, games, unrelated field), reply with ONLY this exact sentence and nothing else: "Hmm, that's not about our question. ${offTopic}" Never answer off-topic content, not even briefly. Only when the question clearly belongs to the topic, explain in the tone above.`)
+IMPORTANT — topic guard: First check if the question is genuinely related to the CONTEXT (the original question and its answer). If it is NOT, reply with ONLY this exact sentence and nothing else: "Hmm, that's not about our question. ${offTopic}" Only when the question clearly belongs to the topic, explain in the tone above.`)
     + `\n\n${de ? "Kontext (die ursprüngliche Frage und Antwort, auf die sich das Kind bezieht):" : "Context (the original question and answer the child is following up on):"}\n${context}`;
 }
 
@@ -31,6 +32,9 @@ export const Route = createFileRoute("/api/followup")({
   server: {
     handlers: {
       POST: async ({ request }) => {
+        const access = await requireLumiApiAccess(request, { bucket: "followup", limit: 120 });
+        if (!access.ok) return access.response;
+
         let body: { messages?: Msg[]; lang?: string; age?: number; context?: string };
         try { body = await request.json(); } catch { return new Response("Bad JSON", { status: 400 }); }
 
