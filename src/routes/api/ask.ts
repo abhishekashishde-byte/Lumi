@@ -1,5 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { generateStructuredJson } from "@/lib/ai/provider";
+import { requireLumiApiAccess } from "@/lib/api/auth.server";
+
+const PROMPT_VERSION = "lumi-ask-2026-08-16-v2";
 
 function ageSpec(age: number, lang: "de" | "en") {
   const de = lang === "de";
@@ -65,7 +68,7 @@ Return EXACTLY this JSON (no markdown, nothing else):
   "headline": "${de ? "max. 10 Wörter" : "max 10 words"}",
   "image_search_term": "english photo term (3-5 words)",
   "image_search_term_2": "english photo term (different subject, 3-5 words)",
-  "youtube_search_terms": ${de ? `["2-3 YouTube-Suchen zum WISSENSCHAFTLICHEN 'WARUM'. NIEMALS 'wie funktioniert', 'Aufbau', 'Schaltung', 'Bauen'. Beispiele: Frage 'Warum ist Ampel-Stop rot?' → ['warum ist rot die Stopp-Farbe Kinder','warum sieht man rotes Licht am weitesten Physik','Geschichte der Ampelfarben Kinder']. Frage 'Warum im schwarzen Shirt heißer?' → ['warum absorbiert schwarz mehr Wärme Kinder erklärt']. Fokus auf das PHYSIKALISCHE/BIOLOGISCHE Konzept, NIE auf Alltagsobjekte/Technik-Aufbau."]` : `["2-3 YouTube searches for the SCIENTIFIC 'WHY'. NEVER 'how it works', 'circuit', 'wiring', 'build'. Examples: 'Why is traffic light stop red?' → ['why is red the stop color for kids','why red light travels furthest physics kids','history of traffic light colors kids']. 'Why hotter in black shirt?' → ['why black absorbs more heat than white for kids']. Focus on the physics/biology concept, NEVER on everyday-object/tech-assembly drift."]`},
+  "youtube_search_terms": ${de ? `["2-3 YouTube-Suchen zum WISSENSCHAFTLICHEN 'WARUM'. NIEMALS 'wie funktioniert', 'Aufbau', 'Schaltung', 'Bauen'. Fokus auf das PHYSIKALISCHE/BIOLOGISCHE Konzept, NIE auf Alltagsobjekte/Technik-Aufbau."]` : `["2-3 YouTube searches for the SCIENTIFIC 'WHY'. NEVER 'how it works', 'circuit', 'wiring', 'build'. Focus on the physics/biology concept, NEVER on everyday-object/tech-assembly drift."]`},
   "analogy": "${de ? "Stell dir vor… 2-3 Sätze" : "Imagine… 2-3 sentences"}",
   "paragraphs": ["…", "…", "…"],
   "key_points": [ { "icon": "emoji", "title": "${de ? "kurz" : "short"}", "text": "${de ? "Fakt" : "fact"}" } ],
@@ -81,6 +84,9 @@ export const Route = createFileRoute("/api/ask")({
   server: {
     handlers: {
       POST: async ({ request }) => {
+        const access = await requireLumiApiAccess(request, { bucket: "ask", limit: 60 });
+        if (!access.ok) return access.response;
+
         let body: { question?: string; lang?: string; age?: number };
         try { body = await request.json(); } catch { return new Response("Bad JSON", { status: 400 }); }
         const question = (body.question ?? "").toString().slice(0, 300).trim();
@@ -89,42 +95,38 @@ export const Route = createFileRoute("/api/ask")({
         const ageRaw = Number(body.age);
         const age = Number.isFinite(ageRaw) ? Math.min(99, Math.max(6, Math.round(ageRaw))) : 9;
 
-        // Normalize the question for cache-key stability: lowercase, collapse whitespace,
-        // strip trailing punctuation. Same wording w/ different casing = same cache hit.
         const normalized = question
           .toLowerCase()
           .replace(/\s+/g, " ")
           .replace(/[.!?…]+$/u, "")
           .trim();
-        // Bucket age so ages within the same reading-level band share a cache entry.
         const ageBand = age <= 8 ? 8 : age <= 10 ? 10 : age <= 13 ? 13 : age <= 16 ? 16 : 99;
 
-        // SHA-256 over lang|ageBand|normalized — stable, no PII.
         const encoder = new TextEncoder();
         const hashBuf = await crypto.subtle.digest(
           "SHA-256",
-          encoder.encode(`${lang}|${ageBand}|${normalized}`),
+          encoder.encode(`${PROMPT_VERSION}|${lang}|${ageBand}|${normalized}`),
         );
         const cacheKey = Array.from(new Uint8Array(hashBuf))
           .map((b) => b.toString(16).padStart(2, "0"))
           .join("");
 
-        // Cache lookup (best-effort; failures fall through to the model).
         try {
           const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-          const { data: cached } = await supabaseAdmin
-            .from("ask_cache")
-            .select("response")
+          const { data: cached } = await (supabaseAdmin as any)
+            .from("lumi_answer_cache")
+            .select("response,hits")
             .eq("cache_key", cacheKey)
+            .eq("prompt_version", PROMPT_VERSION)
+            .gt("expires_at", new Date().toISOString())
             .maybeSingle();
           if (cached?.response) {
-            // Fire-and-forget usage stats.
-            supabaseAdmin
-              .from("ask_cache")
-              .update({ hits: (cached as any).hits ? (cached as any).hits + 1 : 2, last_used_at: new Date().toISOString() })
+            (supabaseAdmin as any)
+              .from("lumi_answer_cache")
+              .update({ hits: Number(cached.hits ?? 1) + 1, last_used_at: new Date().toISOString() })
               .eq("cache_key", cacheKey)
               .then(() => {}, () => {});
-            return Response.json(cached.response);
+            return Response.json(cached.response, { headers: { "X-Lumi-Cache": "HIT" } });
           }
         } catch (e) {
           console.warn("[ask] cache read failed", e);
@@ -149,7 +151,6 @@ export const Route = createFileRoute("/api/ask")({
             .filter(Boolean);
         }
 
-        // Sanitize ambiguous image terms (person/brand collisions on Wikimedia).
         const AMBIGUOUS: Record<string, string> = {
           lightning: "cloud to ground lightning storm photograph",
           mercury: "planet mercury surface nasa",
@@ -176,20 +177,30 @@ export const Route = createFileRoute("/api/ask")({
         parsed.image_search_term = fixTerm(parsed.image_search_term);
         parsed.image_search_term_2 = fixTerm(parsed.image_search_term_2);
 
-        // Cache write (best-effort).
         try {
           const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-          await supabaseAdmin
-            .from("ask_cache")
+          const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+          await (supabaseAdmin as any)
+            .from("lumi_answer_cache")
             .upsert(
-              { cache_key: cacheKey, question, lang, age: ageBand, response: parsed },
+              {
+                cache_key: cacheKey,
+                prompt_version: PROMPT_VERSION,
+                question,
+                lang,
+                age_band: ageBand,
+                response: parsed,
+                hits: 1,
+                last_used_at: new Date().toISOString(),
+                expires_at: expiresAt,
+              },
               { onConflict: "cache_key" },
             );
         } catch (e) {
           console.warn("[ask] cache write failed", e);
         }
 
-        return Response.json(parsed);
+        return Response.json(parsed, { headers: { "X-Lumi-Cache": "MISS" } });
       },
     },
   },
