@@ -24,44 +24,58 @@ export async function requireLumiApiAccess(
     return { ok: false, response: jsonError(401, "Authentication required") };
   }
 
-  const { data, error } = await supabaseAdmin.auth.getUser(token);
-  const user = data.user;
-  if (error || !user) {
-    return { ok: false, response: jsonError(401, "Invalid or expired session") };
+  let userId: string | null = null;
+  try {
+    const { data, error } = await supabaseAdmin.auth.getUser(token);
+    const user = data.user;
+    if (error || !user) {
+      return { ok: false, response: jsonError(401, "Invalid or expired session") };
+    }
+    userId = user.id;
+  } catch (error) {
+    console.error("[Lumi auth] session verification failed", error);
+    return { ok: false, response: jsonError(401, "Unable to verify session") };
   }
 
-  const { data: quotaRows, error: quotaError } = await (supabaseAdmin as any).rpc(
-    "consume_lumi_quota",
-    {
-      p_user_id: user.id,
-      p_bucket: bucket,
-      p_limit: limit,
-      p_window_seconds: windowSeconds,
-    },
-  );
+  // Quota enforcement is intentionally fail-open. Authentication must always be
+  // enforced, but a temporary database/RPC issue must not make Lumi unusable.
+  try {
+    const { data: quotaRows, error: quotaError } = await (supabaseAdmin as any).rpc(
+      "consume_lumi_quota",
+      {
+        p_user_id: userId,
+        p_bucket: bucket,
+        p_limit: limit,
+        p_window_seconds: windowSeconds,
+      },
+    );
 
-  if (quotaError) {
-    console.error("[Lumi quota]", quotaError);
-    return { ok: false, response: jsonError(503, "Usage guard unavailable") };
+    if (quotaError) {
+      console.warn("[Lumi quota] limiter unavailable; allowing authenticated request", quotaError);
+      return { ok: true, userId, remaining: -1, resetAt: null };
+    }
+
+    const row = Array.isArray(quotaRows) ? quotaRows[0] : quotaRows;
+    const allowed = Boolean(row?.allowed);
+    const remaining = Number(row?.remaining ?? 0);
+    const resetAt = row?.reset_at ? String(row.reset_at) : null;
+
+    if (!allowed) {
+      const retryAfter = resetAt
+        ? Math.max(1, Math.ceil((new Date(resetAt).getTime() - Date.now()) / 1000))
+        : windowSeconds;
+      return {
+        ok: false,
+        response: jsonError(429, "Too many requests. Please try again later.", {
+          "Retry-After": String(retryAfter),
+          "X-RateLimit-Remaining": "0",
+        }),
+      };
+    }
+
+    return { ok: true, userId, remaining, resetAt };
+  } catch (error) {
+    console.warn("[Lumi quota] limiter crashed; allowing authenticated request", error);
+    return { ok: true, userId, remaining: -1, resetAt: null };
   }
-
-  const row = Array.isArray(quotaRows) ? quotaRows[0] : quotaRows;
-  const allowed = Boolean(row?.allowed);
-  const remaining = Number(row?.remaining ?? 0);
-  const resetAt = row?.reset_at ? String(row.reset_at) : null;
-
-  if (!allowed) {
-    const retryAfter = resetAt
-      ? Math.max(1, Math.ceil((new Date(resetAt).getTime() - Date.now()) / 1000))
-      : windowSeconds;
-    return {
-      ok: false,
-      response: jsonError(429, "Too many requests. Please try again later.", {
-        "Retry-After": String(retryAfter),
-        "X-RateLimit-Remaining": "0",
-      }),
-    };
-  }
-
-  return { ok: true, userId: user.id, remaining, resetAt };
 }
