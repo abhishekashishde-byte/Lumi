@@ -108,11 +108,43 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   errorComponent: ErrorComponent,
 });
 
+type PublicConfig = {
+  supabaseUrl: string;
+  supabasePublishableKey: string;
+};
+
+function getPublicConfig(): PublicConfig {
+  if (typeof window !== "undefined") {
+    return (window as any).__LUMI_PUBLIC_CONFIG__ ?? {
+      supabaseUrl: "",
+      supabasePublishableKey: "",
+    };
+  }
+
+  return {
+    supabaseUrl:
+      process.env.VITE_SUPABASE_URL ||
+      process.env.SUPABASE_URL ||
+      "",
+    supabasePublishableKey:
+      process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+      process.env.VITE_SUPABASE_ANON_KEY ||
+      process.env.VITE_SUPABASE_KEY ||
+      process.env.SUPABASE_PUBLISHABLE_KEY ||
+      process.env.SUPABASE_ANON_KEY ||
+      "",
+  };
+}
+
 function RootShell({ children }: { children: ReactNode }) {
+  const publicConfig = getPublicConfig();
+  const publicConfigScript = `window.__LUMI_PUBLIC_CONFIG__=${JSON.stringify(publicConfig).replace(/</g, "\\u003c")};`;
+
   return (
     <html lang="de">
       <head>
         <HeadContent />
+        <script dangerouslySetInnerHTML={{ __html: publicConfigScript }} />
       </head>
       <body>
         {children}
