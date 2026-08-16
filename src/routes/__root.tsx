@@ -17,6 +17,7 @@ import { LangProvider } from "../lib/i18n";
 import { SettingsProvider } from "../lib/settings";
 import { ProfileProvider, AuthGate } from "../lib/profile";
 import { DiscoveryCelebration } from "../components/DiscoveryCelebration";
+import { LumiRuntime } from "../components/LumiRuntime";
 
 function NotFoundComponent() {
   return (
@@ -164,6 +165,7 @@ function RootComponent() {
       <LangProvider>
         <SettingsProvider>
           <ProfileProvider>
+            <LumiRuntime />
             {isPublicRoute ? (
               <Outlet />
             ) : (
