@@ -8,7 +8,7 @@ import {
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { BottomNav } from "../components/BottomNav";
@@ -131,10 +131,10 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       <LangProvider>
         <SettingsProvider>
-          <ProfileProvider>
-            {isPublicRoute ? (
-              <Outlet />
-            ) : (
+          {isPublicRoute ? (
+            <Outlet />
+          ) : (
+            <ProfileProvider>
               <AuthGate>
                 <div className="min-h-screen pb-24">
                   <TopBar />
@@ -143,8 +143,8 @@ function RootComponent() {
                   <DiscoveryCelebration />
                 </div>
               </AuthGate>
-            )}
-          </ProfileProvider>
+            </ProfileProvider>
+          )}
         </SettingsProvider>
       </LangProvider>
     </QueryClientProvider>
