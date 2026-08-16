@@ -10,6 +10,7 @@ type LumiPublicConfig = {
 declare global {
   interface Window {
     __LUMI_PUBLIC_CONFIG__?: LumiPublicConfig;
+    __LUMI_AUTH_FETCH_INSTALLED__?: boolean;
   }
 }
 
@@ -120,3 +121,33 @@ export const supabase = new Proxy({} as ReturnType<typeof createSupabaseClient>,
     return Reflect.get(_supabase, prop, receiver);
   },
 });
+
+// Existing feature code uses normal fetch() for Lumi API routes. Attach the logged-in
+// access token centrally so every expensive endpoint can enforce server-side auth.
+if (typeof window !== 'undefined' && !window.__LUMI_AUTH_FETCH_INSTALLED__) {
+  const protectedPaths = new Set(['/api/ask', '/api/followup', '/api/transcribe', '/api/tts']);
+  const originalFetch = window.fetch.bind(window);
+  window.__LUMI_AUTH_FETCH_INSTALLED__ = true;
+
+  window.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    let target: URL;
+    try {
+      const raw = input instanceof Request ? input.url : String(input);
+      target = new URL(raw, window.location.href);
+    } catch {
+      return originalFetch(input, init);
+    }
+
+    if (target.origin !== window.location.origin || !protectedPaths.has(target.pathname)) {
+      return originalFetch(input, init);
+    }
+
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
+    if (init.headers) new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+
+    return originalFetch(input, { ...init, headers });
+  }) as typeof window.fetch;
+}
