@@ -2,6 +2,17 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 
+type LumiPublicConfig = {
+  supabaseUrl?: string;
+  supabasePublishableKey?: string;
+};
+
+declare global {
+  interface Window {
+    __LUMI_PUBLIC_CONFIG__?: LumiPublicConfig;
+  }
+}
+
 function isNewSupabaseApiKey(value: string): boolean {
   return value.startsWith('sb_publishable_') || value.startsWith('sb_secret_');
 }
@@ -27,16 +38,17 @@ function createSupabaseFetch(supabaseKey: string): typeof fetch {
 }
 
 function createSupabaseClient() {
-  // Browser builds must use VITE_ variables. Support the common Supabase key names
-  // so Lumi does not break just because Vercel uses a slightly different label.
   const viteEnv = import.meta.env as Record<string, string | undefined>;
   const processEnv = typeof process !== 'undefined' ? process.env : undefined;
+  const runtimeConfig = typeof window !== 'undefined' ? window.__LUMI_PUBLIC_CONFIG__ : undefined;
 
   const SUPABASE_URL =
+    runtimeConfig?.supabaseUrl ||
     viteEnv.VITE_SUPABASE_URL ||
     processEnv?.SUPABASE_URL;
 
   const SUPABASE_PUBLISHABLE_KEY =
+    runtimeConfig?.supabasePublishableKey ||
     viteEnv.VITE_SUPABASE_PUBLISHABLE_KEY ||
     viteEnv.VITE_SUPABASE_ANON_KEY ||
     viteEnv.VITE_SUPABASE_KEY ||
@@ -68,8 +80,6 @@ function createSupabaseClient() {
 
 let _supabase: ReturnType<typeof createSupabaseClient> | undefined;
 
-// Import the supabase client like this:
-// import { supabase } from "@/integrations/supabase/client";
 export const supabase = new Proxy({} as ReturnType<typeof createSupabaseClient>, {
   get(_, prop, receiver) {
     if (!_supabase) _supabase = createSupabaseClient();
