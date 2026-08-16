@@ -6,6 +6,7 @@ import { Sparkles } from "lucide-react";
 import lumiLogo from "@/assets/lumi-logo.png";
 
 type Profile = { id: string; age: number | null; display_name: string | null };
+type ProfilePayload = { age?: number | null; display_name?: string | null };
 
 type Ctx = {
   session: Session | null;
@@ -20,44 +21,127 @@ const ProfileContext = createContext<Ctx>({
   setAge: async () => {}, signOut: async () => {},
 });
 
+function displayNameFor(session: Session): string | null {
+  const meta = session.user.user_metadata ?? {};
+  return (
+    meta.full_name ??
+    meta.name ??
+    session.user.email?.split("@")[0] ??
+    null
+  );
+}
+
+function toProfile(uid: string, data: unknown, fallbackName: string | null): Profile {
+  const payload = (data && typeof data === "object" ? data : {}) as ProfilePayload;
+  const age = Number(payload.age);
+  return {
+    id: uid,
+    age: Number.isFinite(age) ? age : null,
+    display_name: typeof payload.display_name === "string" && payload.display_name.trim()
+      ? payload.display_name
+      : fallbackName,
+  };
+}
+
 export function ProfileProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
 
   useEffect(() => {
     let mounted = true;
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
       setSession(data.session ?? null);
-      setLoading(false);
+      setAuthLoading(false);
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
       setSession(s);
+      setAuthLoading(false);
     });
     return () => { mounted = false; sub.subscription.unsubscribe(); };
   }, []);
 
   useEffect(() => {
-    if (!session?.user) { setProfile(null); return; }
+    let cancelled = false;
+    if (!session?.user) {
+      setProfile(null);
+      setProfileLoading(false);
+      return;
+    }
+
     const uid = session.user.id;
-    supabase.from("profiles").select("id, age, display_name").eq("id", uid).maybeSingle()
-      .then(async ({ data }) => {
-        if (data) { setProfile(data as Profile); return; }
-        // Fallback: insert if trigger missed (shouldn't normally happen)
-        await supabase.from("profiles").insert({ id: uid }).select().maybeSingle();
-        const { data: again } = await supabase.from("profiles").select("id, age, display_name").eq("id", uid).maybeSingle();
-        if (again) setProfile(again as Profile);
-      });
+    const fallbackName = displayNameFor(session);
+    setProfileLoading(true);
+
+    (async () => {
+      const { data, error } = await (supabase as any)
+        .from("lumi_data")
+        .select("data")
+        .eq("user_id", uid)
+        .eq("record_type", "profile")
+        .eq("record_key", "main")
+        .maybeSingle();
+
+      if (cancelled) return;
+
+      if (!error && data?.data) {
+        setProfile(toProfile(uid, data.data, fallbackName));
+        setProfileLoading(false);
+        return;
+      }
+
+      const initial = { age: null, display_name: fallbackName };
+      const { data: created, error: createError } = await (supabase as any)
+        .from("lumi_data")
+        .upsert(
+          { user_id: uid, record_type: "profile", record_key: "main", data: initial },
+          { onConflict: "user_id,record_type,record_key" },
+        )
+        .select("data")
+        .maybeSingle();
+
+      if (cancelled) return;
+      if (createError) {
+        console.error("[Lumi profile] load/create failed", createError);
+        setProfile(toProfile(uid, initial, fallbackName));
+      } else {
+        setProfile(toProfile(uid, created?.data ?? initial, fallbackName));
+      }
+      setProfileLoading(false);
+    })();
+
+    return () => { cancelled = true; };
   }, [session?.user?.id]);
 
   const setAge = async (age: number) => {
     if (!session?.user) return;
-    const { data } = await supabase.from("profiles").update({ age }).eq("id", session.user.id).select().maybeSingle();
-    if (data) setProfile(data as Profile);
+    const uid = session.user.id;
+    const safeAge = Math.min(99, Math.max(6, Math.round(age)));
+    const next = {
+      age: safeAge,
+      display_name: profile?.display_name ?? displayNameFor(session),
+    };
+
+    const { data, error } = await (supabase as any)
+      .from("lumi_data")
+      .upsert(
+        { user_id: uid, record_type: "profile", record_key: "main", data: next },
+        { onConflict: "user_id,record_type,record_key" },
+      )
+      .select("data")
+      .maybeSingle();
+
+    if (error) {
+      console.error("[Lumi profile] age save failed", error);
+      return;
+    }
+    setProfile(toProfile(uid, data?.data ?? next, next.display_name));
   };
 
   const signOut = async () => { await supabase.auth.signOut(); };
+  const loading = authLoading || (!!session?.user && profileLoading);
 
   return (
     <ProfileContext.Provider value={{ session, profile, loading, setAge, signOut }}>
@@ -70,7 +154,6 @@ export function useProfile() { return useContext(ProfileContext); }
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const { session, profile, loading } = useProfile();
-  const { lang } = useLang();
   const t = useT();
 
   if (loading) {
@@ -82,7 +165,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
 
   if (!session) return <SignInScreen />;
-  if (profile && profile.age == null) return <AgePicker />;
+  if (!profile || profile.age == null) return <AgePicker />;
   return <>{children}</>;
 }
 
@@ -97,7 +180,7 @@ function SignInScreen() {
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: window.location.origin },
+        options: { redirectTo: "https://lumi-five-beryl.vercel.app/welcome" },
       });
       if (error) { setErr(error.message ?? "Sign-in failed"); setBusy(false); return; }
     } catch (e: any) { setErr(e?.message ?? "Sign-in failed"); setBusy(false); }
