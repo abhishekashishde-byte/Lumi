@@ -163,10 +163,10 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       <LangProvider>
         <SettingsProvider>
-          {isPublicRoute ? (
-            <Outlet />
-          ) : (
-            <ProfileProvider>
+          <ProfileProvider>
+            {isPublicRoute ? (
+              <Outlet />
+            ) : (
               <AuthGate>
                 <div className="min-h-screen pb-24">
                   <TopBar />
@@ -175,8 +175,8 @@ function RootComponent() {
                   <DiscoveryCelebration />
                 </div>
               </AuthGate>
-            </ProfileProvider>
-          )}
+            )}
+          </ProfileProvider>
         </SettingsProvider>
       </LangProvider>
     </QueryClientProvider>
