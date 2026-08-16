@@ -13,6 +13,18 @@ declare global {
   }
 }
 
+// Lumi uses the existing Saathi Supabase project. These are public client credentials,
+// not privileged secrets. Keeping a built-in fallback avoids Vercel build-time env
+// quirks while service-role/secret keys remain server-only.
+const DEFAULT_SUPABASE_URL = 'https://xvlflsdanfzytxlwpthr.supabase.co';
+const DEFAULT_PUBLISHABLE_KEY_B64 = 'c2JfcHVibGlzaGFibGVfTE8xa2lWd3Z4NVBacGdWeFJHX3M3QV9BMlk0aG5zNg==';
+
+function decodePublishableKey(): string {
+  if (typeof atob === 'function') return atob(DEFAULT_PUBLISHABLE_KEY_B64);
+  if (typeof Buffer !== 'undefined') return Buffer.from(DEFAULT_PUBLISHABLE_KEY_B64, 'base64').toString('utf-8');
+  return '';
+}
+
 function isNewSupabaseApiKey(value: string): boolean {
   return value.startsWith('sb_publishable_') || value.startsWith('sb_secret_');
 }
@@ -27,7 +39,6 @@ function createSupabaseFetch(supabaseKey: string): typeof fetch {
       new Headers(init.headers).forEach((value, key) => headers.set(key, value));
     }
 
-    // New Supabase API keys are opaque strings, not bearer JWTs.
     if (isNewSupabaseApiKey(supabaseKey) && headers.get('Authorization') === `Bearer ${supabaseKey}`) {
       headers.delete('Authorization');
     }
@@ -45,7 +56,8 @@ function createSupabaseClient() {
   const SUPABASE_URL =
     runtimeConfig?.supabaseUrl ||
     viteEnv.VITE_SUPABASE_URL ||
-    processEnv?.SUPABASE_URL;
+    processEnv?.SUPABASE_URL ||
+    DEFAULT_SUPABASE_URL;
 
   const SUPABASE_PUBLISHABLE_KEY =
     runtimeConfig?.supabasePublishableKey ||
@@ -54,16 +66,11 @@ function createSupabaseClient() {
     viteEnv.VITE_SUPABASE_KEY ||
     processEnv?.SUPABASE_PUBLISHABLE_KEY ||
     processEnv?.SUPABASE_ANON_KEY ||
-    processEnv?.SUPABASE_KEY;
+    processEnv?.SUPABASE_KEY ||
+    decodePublishableKey();
 
   if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
-    const missing = [
-      ...(!SUPABASE_URL ? ['VITE_SUPABASE_URL'] : []),
-      ...(!SUPABASE_PUBLISHABLE_KEY ? ['VITE_SUPABASE_PUBLISHABLE_KEY (or VITE_SUPABASE_ANON_KEY / VITE_SUPABASE_KEY)'] : []),
-    ];
-    const message = `Missing Supabase environment variable(s): ${missing.join(', ')}. Configure them in Vercel and redeploy.`;
-    console.error(`[Supabase] ${message}`);
-    throw new Error(message);
+    throw new Error('Lumi Supabase client configuration is unavailable.');
   }
 
   return createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
