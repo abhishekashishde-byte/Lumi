@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { requireLumiApiAccess } from "@/lib/api/auth.server";
 
 const KID_INSTRUCTIONS_EN =
   "You are Lumi, a warm and playful storyteller for children aged 5 to 10. " +
@@ -16,6 +17,9 @@ export const Route = createFileRoute("/api/tts")({
   server: {
     handlers: {
       POST: async ({ request }) => {
+        const access = await requireLumiApiAccess(request, { bucket: "tts", limit: 80 });
+        if (!access.ok) return access.response;
+
         const key = process.env.OPENAI_API_KEY;
         if (!key) return new Response("Missing OPENAI_API_KEY", { status: 500 });
 
@@ -56,7 +60,7 @@ export const Route = createFileRoute("/api/tts")({
           return new Response(res.body, {
             headers: {
               "Content-Type": "audio/mpeg",
-              "Cache-Control": "no-store",
+              "Cache-Control": "private, max-age=300",
             },
           });
         } catch (err) {
