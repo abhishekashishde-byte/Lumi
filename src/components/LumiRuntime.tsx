@@ -2,6 +2,14 @@ import { useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { installAuthenticatedApiFetch } from "@/lib/api/client";
 
+// Install the protected-API fetch wrapper as soon as the browser module loads.
+// This must happen before child useEffects run, because /entdecken can auto-submit
+// a pending question immediately after mount. Relying only on LumiRuntime's effect
+// created a race where /api/ask could be sent without the Authorization header.
+if (typeof window !== "undefined") {
+  installAuthenticatedApiFetch();
+}
+
 const PASSPORT_KEY = "warum:passport:v2";
 const RECENT_KEY = "warum_entdecken_recent_v2";
 const RECENT_META_KEY = "warum_entdecken_recent_meta_v1";
@@ -104,6 +112,8 @@ export function LumiRuntime() {
   const hydratingRef = useRef(false);
 
   useEffect(() => {
+    // The wrapper is already installed at module load. Calling again is intentionally
+    // idempotent and gives us the restore callback for unmount cleanup.
     const restoreFetch = installAuthenticatedApiFetch();
 
     const hydrate = async (userId: string) => {
