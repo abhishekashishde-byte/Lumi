@@ -1,5 +1,3 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-
 const SUPABASE_URL = 'https://xvlflsdanfzytxlwpthr.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_LO1kiVwvx5PZpgVxRG_s7A_A2Y4hns6';
 
@@ -32,21 +30,21 @@ function systemPrompt(age: number, lang: 'de' | 'en') {
 }
 
 async function verifySupabaseUser(token: string) {
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+  const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
     headers: {
       apikey: SUPABASE_PUBLISHABLE_KEY,
       Authorization: `Bearer ${token}`,
     },
   });
-  if (!res.ok) return null;
-  return res.json();
+  if (!response.ok) return null;
+  return response.json();
 }
 
 async function callGemini(question: string, age: number, lang: 'de' | 'en') {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('Missing GEMINI_API_KEY');
   const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
     body: JSON.stringify({
@@ -55,17 +53,17 @@ async function callGemini(question: string, age: number, lang: 'de' | 'en') {
       generationConfig: { responseMimeType: 'application/json', temperature: 0.35 },
     }),
   });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Gemini error ${res.status}: ${detail || res.statusText}`);
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`Gemini error ${response.status}: ${detail || response.statusText}`);
   }
-  const data = await res.json();
-  const text = (data?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p?.text ?? '').join('').trim();
+  const data = await response.json();
+  const text = (data?.candidates?.[0]?.content?.parts ?? []).map((part: any) => part?.text ?? '').join('').trim();
   if (!text) throw new Error('Gemini returned no text');
   return JSON.parse(text);
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const auth = String(req.headers.authorization || '');
