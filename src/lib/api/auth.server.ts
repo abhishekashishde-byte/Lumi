@@ -1,5 +1,3 @@
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
-
 type AccessOptions = {
   bucket: string;
   limit: number;
@@ -10,8 +8,64 @@ type AccessResult =
   | { ok: true; userId: string; remaining: number; resetAt: string | null }
   | { ok: false; response: Response };
 
+const SUPABASE_URL = "https://xvlflsdanfzytxlwpthr.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_LO1kiVwvx5PZpgVxRG_s7A_A2Y4hns6";
+
 function jsonError(status: number, error: string, headers?: HeadersInit) {
   return Response.json({ error }, { status, headers });
+}
+
+async function verifyUser(token: string): Promise<string | null> {
+  const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    method: "GET",
+    headers: {
+      apikey: SUPABASE_PUBLISHABLE_KEY,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) return null;
+  const user = await response.json().catch(() => null);
+  return typeof user?.id === "string" ? user.id : null;
+}
+
+async function consumeQuota(
+  token: string,
+  userId: string,
+  bucket: string,
+  limit: number,
+  windowSeconds: number,
+): Promise<{ allowed: boolean; remaining: number; resetAt: string | null } | null> {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/consume_lumi_quota`, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_PUBLISHABLE_KEY,
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      p_user_id: userId,
+      p_bucket: bucket,
+      p_limit: limit,
+      p_window_seconds: windowSeconds,
+    }),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    console.warn("[Lumi quota] limiter unavailable; allowing authenticated request", response.status, detail);
+    return null;
+  }
+
+  const payload = await response.json().catch(() => null);
+  const row = Array.isArray(payload) ? payload[0] : payload;
+  if (!row) return null;
+
+  return {
+    allowed: Boolean(row.allowed),
+    remaining: Number(row.remaining ?? 0),
+    resetAt: row.reset_at ? String(row.reset_at) : null,
+  };
 }
 
 export async function requireLumiApiAccess(
@@ -26,43 +80,27 @@ export async function requireLumiApiAccess(
 
   let userId: string | null = null;
   try {
-    const { data, error } = await supabaseAdmin.auth.getUser(token);
-    const user = data.user;
-    if (error || !user) {
-      return { ok: false, response: jsonError(401, "Invalid or expired session") };
-    }
-    userId = user.id;
+    userId = await verifyUser(token);
   } catch (error) {
     console.error("[Lumi auth] session verification failed", error);
     return { ok: false, response: jsonError(401, "Unable to verify session") };
   }
 
-  // Quota enforcement is intentionally fail-open. Authentication must always be
-  // enforced, but a temporary database/RPC issue must not make Lumi unusable.
-  try {
-    const { data: quotaRows, error: quotaError } = await (supabaseAdmin as any).rpc(
-      "consume_lumi_quota",
-      {
-        p_user_id: userId,
-        p_bucket: bucket,
-        p_limit: limit,
-        p_window_seconds: windowSeconds,
-      },
-    );
+  if (!userId) {
+    return { ok: false, response: jsonError(401, "Invalid or expired session") };
+  }
 
-    if (quotaError) {
-      console.warn("[Lumi quota] limiter unavailable; allowing authenticated request", quotaError);
+  // Authentication is mandatory. Quota enforcement is fail-open so a temporary
+  // database/RPC issue never blocks a valid Lumi question.
+  try {
+    const quota = await consumeQuota(token, userId, bucket, limit, windowSeconds);
+    if (!quota) {
       return { ok: true, userId, remaining: -1, resetAt: null };
     }
 
-    const row = Array.isArray(quotaRows) ? quotaRows[0] : quotaRows;
-    const allowed = Boolean(row?.allowed);
-    const remaining = Number(row?.remaining ?? 0);
-    const resetAt = row?.reset_at ? String(row.reset_at) : null;
-
-    if (!allowed) {
-      const retryAfter = resetAt
-        ? Math.max(1, Math.ceil((new Date(resetAt).getTime() - Date.now()) / 1000))
+    if (!quota.allowed) {
+      const retryAfter = quota.resetAt
+        ? Math.max(1, Math.ceil((new Date(quota.resetAt).getTime() - Date.now()) / 1000))
         : windowSeconds;
       return {
         ok: false,
@@ -73,7 +111,12 @@ export async function requireLumiApiAccess(
       };
     }
 
-    return { ok: true, userId, remaining, resetAt };
+    return {
+      ok: true,
+      userId,
+      remaining: quota.remaining,
+      resetAt: quota.resetAt,
+    };
   } catch (error) {
     console.warn("[Lumi quota] limiter crashed; allowing authenticated request", error);
     return { ok: true, userId, remaining: -1, resetAt: null };
